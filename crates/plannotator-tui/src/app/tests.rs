@@ -437,3 +437,64 @@ fn pasting_into_the_comment_box_keeps_newlines() {
     let placed = app.open.store.placed();
     assert_eq!(placed.last().expect("annotation").annotation.body, "pasted one\npasted two");
 }
+
+#[test]
+fn roaming_moves_by_row_so_a_selection_can_start_mid_block() {
+    // A paragraph with a hard break (two rows), then a list: in block mode `j` from the top lands on "- one",
+    // roaming lands on "second line" of the same block.
+    let source = DocumentSource::new(
+        "first line\\\nsecond line\n\n- one\n- two\n".to_owned(),
+        "doc.md",
+        true,
+        Provenance::Stdin,
+    );
+    let mut app = App::open(source, 60, Box::new(Discard)).expect("app opens");
+    app.data_dir = scratch_data_dir();
+    draw(&mut app);
+    let j = key(KeyCode::Char('j'), KeyModifiers::NONE);
+    app.handle_event(&j).expect("block j");
+    assert_eq!((app.selected, app.cursor.0), (1, 3), "block mode: j skips to the list");
+    app.handle_event(&key(KeyCode::Char('g'), KeyModifiers::NONE)).expect("g");
+
+    app.handle_event(&key(KeyCode::Char('i'), KeyModifiers::NONE)).expect("i");
+    app.handle_event(&j).expect("roam j");
+    assert_eq!((app.selected, app.cursor.0), (0, 1), "roaming: j moves one row, same block");
+    app.handle_event(&key(KeyCode::Char('v'), KeyModifiers::NONE)).expect("v");
+    app.handle_event(&key(KeyCode::Char('$'), KeyModifiers::NONE)).expect("$");
+    app.handle_event(&key(KeyCode::Enter, KeyModifiers::NONE)).expect("enter");
+    let pending = app.pending.as_ref().expect("selection finished");
+    assert_eq!(app.open.doc.source.get(pending.range.clone()), Some("second line"));
+
+    // Esc clears the selection, a second Esc leaves roaming, and j jumps blocks again.
+    app.handle_event(&key(KeyCode::Esc, KeyModifiers::NONE)).expect("clear");
+    app.handle_event(&key(KeyCode::Esc, KeyModifiers::NONE)).expect("leave roam");
+    app.handle_event(&j).expect("block j");
+    assert_eq!(app.selected, 1);
+}
+
+#[test]
+fn a_block_key_ends_roaming() {
+    let mut app = app(Box::new(Discard));
+    draw(&mut app);
+    app.handle_event(&key(KeyCode::Char('i'), KeyModifiers::NONE)).expect("i");
+    assert!(app.roam);
+    app.handle_event(&key(KeyCode::Char('G'), KeyModifiers::NONE)).expect("G");
+    assert!(!app.roam, "jumping to a block puts the cursor back on its first row");
+    assert_eq!(app.cursor, (app.open.layout.blocks[app.selected].first_row, 0));
+}
+
+#[test]
+fn a_column_move_in_block_mode_starts_roaming_so_the_cursor_is_drawn() {
+    // Before roaming existed, h/l moved the cursor in block mode with nothing on screen,
+    // and v then anchored at a column the user never saw.
+    let mut app = app(Box::new(Discard));
+    draw(&mut app);
+    assert!(!app.roam);
+    app.handle_event(&key(KeyCode::Char('l'), KeyModifiers::NONE)).expect("l");
+    assert!(app.roam, "l in block mode enters roaming");
+    assert_eq!(app.cursor, (0, 1), "and moves the cursor by one column");
+    app.handle_event(&key(KeyCode::Right, KeyModifiers::NONE)).expect("right");
+    assert_eq!(app.cursor, (0, 2));
+    app.handle_event(&key(KeyCode::Char('v'), KeyModifiers::NONE)).expect("v");
+    assert_eq!(app.selection.map(|s| s.anchor()), Some((0, 2)), "v anchors where the cursor is shown");
+}
