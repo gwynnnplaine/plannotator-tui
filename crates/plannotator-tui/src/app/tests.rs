@@ -595,3 +595,37 @@ fn paging_a_document_that_cannot_scroll_selects_the_edge_block() {
     app.handle_event(&key(KeyCode::Char('u'), KeyModifiers::CONTROL)).expect("ctrl+u");
     assert_eq!(app.selected, 0, "ctrl+u selects the first block");
 }
+
+#[test]
+fn paging_through_a_block_taller_than_the_screen_selects_that_block() {
+    // A code block taller than the view starts above it after one page; it is still the
+    // block on screen, so paging selects it instead of leaving the selection behind.
+    let code = "line\n".repeat(100);
+    let source = DocumentSource::new(
+        format!("intro\n\n```\n{code}```\n\nafter\n"),
+        "tall.md",
+        true,
+        Provenance::Stdin,
+    );
+    let mut app = App::open(source, 60, Box::new(Discard)).expect("app opens");
+    app.data_dir = scratch_data_dir();
+    draw(&mut app);
+    for _ in 0..6 {
+        app.handle_event(&key(KeyCode::Char('d'), KeyModifiers::CONTROL)).expect("ctrl+d");
+    }
+    assert_eq!(app.selected, 1, "the tall code block is selected");
+    let scroll = app.scroll;
+    app.handle_event(&key(KeyCode::Char('j'), KeyModifiers::NONE)).expect("j");
+    assert_eq!(app.selected, 2, "j continues to the block after the code");
+    assert!(app.scroll >= scroll, "j moves on from the paged view instead of jumping back");
+}
+
+#[test]
+fn paging_a_one_row_pane_keeps_the_selection() {
+    let mut app = paragraphs_app(40);
+    draw_sized(&mut app, 80, 3);
+    app.handle_event(&key(KeyCode::Char('G'), KeyModifiers::NONE)).expect("G");
+    let selected = app.selected;
+    app.handle_event(&key(KeyCode::Char('d'), KeyModifiers::CONTROL)).expect("ctrl+d");
+    assert_eq!(app.selected, selected, "a page of zero rows does not jump to the top");
+}
