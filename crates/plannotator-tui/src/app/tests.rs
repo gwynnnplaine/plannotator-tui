@@ -544,3 +544,54 @@ fn dot_in_the_tree_shows_hidden_folders_but_never_the_skipped_ones() {
     assert_eq!(open_path(&app), "draft.md", "hiding a folder does not close its open file");
     std::fs::remove_dir_all(&root).expect("cleanup");
 }
+
+/// `app`, on a document of `paragraphs` one-line paragraphs.
+fn paragraphs_app(paragraphs: usize) -> App {
+    let source = DocumentSource::new("paragraph\n\n".repeat(paragraphs), "long.md", true, Provenance::Stdin);
+    let mut app = App::open(source, 60, Box::new(Discard)).expect("app opens");
+    app.data_dir = scratch_data_dir();
+    app
+}
+
+/// The first document row on screen, and the row of the selected block.
+fn view_and_selection(app: &App) -> (usize, usize) {
+    (app.scroll, app.open.layout.blocks[app.selected].first_row)
+}
+
+#[test]
+fn paging_down_takes_the_selection_along_so_the_next_block_key_continues_on_screen() {
+    // ctrl+d once moved only the view: the selection stayed above it, and the next j
+    // scrolled the view back to where paging started.
+    let mut app = paragraphs_app(40);
+    draw(&mut app);
+    app.handle_event(&key(KeyCode::Char('d'), KeyModifiers::CONTROL)).expect("ctrl+d");
+    let (scroll, selected) = view_and_selection(&app);
+    assert!(scroll > 0, "the view pages down");
+    assert!(selected >= scroll, "the selection is on screen, not above it");
+
+    app.handle_event(&key(KeyCode::Char('j'), KeyModifiers::NONE)).expect("j");
+    assert!(app.scroll >= scroll, "j continues from the paged view instead of jumping back");
+}
+
+#[test]
+fn paging_up_takes_the_selection_along() {
+    let mut app = paragraphs_app(40);
+    draw(&mut app);
+    app.handle_event(&key(KeyCode::Char('G'), KeyModifiers::NONE)).expect("G");
+    app.handle_event(&key(KeyCode::Char('u'), KeyModifiers::CONTROL)).expect("ctrl+u");
+    let height = usize::from(app.geometry.doc.height);
+    let (scroll, selected) = view_and_selection(&app);
+    assert!(selected < scroll + height, "the selection is on screen, not below it");
+}
+
+#[test]
+fn paging_a_document_that_cannot_scroll_selects_the_edge_block() {
+    // Eight paragraphs fit on screen, so the view cannot move and half a page from the
+    // top lands mid-document. Like vim, the page key goes to the end instead.
+    let mut app = paragraphs_app(8);
+    draw(&mut app);
+    app.handle_event(&key(KeyCode::Char('d'), KeyModifiers::CONTROL)).expect("ctrl+d");
+    assert_eq!(app.selected, app.open.doc.blocks.len() - 1, "ctrl+d selects the last block");
+    app.handle_event(&key(KeyCode::Char('u'), KeyModifiers::CONTROL)).expect("ctrl+u");
+    assert_eq!(app.selected, 0, "ctrl+u selects the first block");
+}
